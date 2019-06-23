@@ -3,6 +3,19 @@
    [goog.dom :as gdom]
    [reagent.core :as reagent :refer [atom]]))
 
+(def note-names ["C" "C#" "D" "D#" "E" "F" "F#" "G" "G#" "A" "A#" "B"])
+
+(defn frequency->midi-note [frequency]
+  (+ 69
+     (js/Math.round
+      (* 12
+         (/ (js/Math.log (/ frequency 440))
+            (js/Math.log 2))))))
+
+(defn frequency->note-name [frequency]
+  (let [midi-note (frequency->midi-note frequency)]
+    (str (get note-names (mod midi-note 12)) " (MIDI: " midi-note ")")))
+
 ;; define your app data so that it doesn't get over-written on reload
 (defonce !app-state (atom {:input-devices '()
                            :current-input nil
@@ -131,27 +144,24 @@
 (defn find-fundamental-freq-from-bytes [buffer sample-rate]
   (let [best-r (atom 0)
         best-k (atom -1)
-        k-start 8                                     ;; frame start distance
+        k-start 20                                     ;; frame start distance
         k-end 1000
-        r-threshold 0.9                              ;; threshold for early exit
+        r-threshold 0.02                              ;; threshold for early exit
         r-success 0.001                              ;; threshold for success case
         normalise #(/ (- % 128) 128)
         continue (atom true)
-        buffer (map normalise (js->clj (js/Array.from buffer)))
+        buffer (js/Array.from buffer)
         n (/ (count buffer) 2)                          ;; buffer size / 2
         first-frame (take n buffer)]
-    (doseq [k (range (inc k-end) k-start -1)
+    (doseq [k (range k-start (inc k-end))
             :while @continue]
       (let [second-frame (drop k buffer)
-            frame-pairs (map (fn [b1 b2] [b1 b2])
+            frame-pairs (map (fn [x y]
+                               (* (normalise x)
+                                  (normalise y)))
                              first-frame
                              second-frame)
-            sum (reduce (fn [sum [b1 b2]]
-                          (+ sum
-                             (* b1
-                                b2)))
-                        0
-                        frame-pairs)
+            sum (apply + frame-pairs)
             r (/ sum n)]
         (when (> r @best-r)
           (reset! best-r r)
@@ -159,13 +169,13 @@
         (when (> r r-threshold)
             (println ">>> found above threshold" r r-threshold)
             (reset! continue false))))
-    (println "best correlation: " @best-r
+    #_(println "best correlation: " @best-r
              " , freq: " (/ sample-rate @best-k))
     (when (> @best-r r-success)
       (/ sample-rate @best-k))))
 
 (defn find-closest-note [fundamental-freq]
-  {:note "note names not yet implemented"})
+  {:note (frequency->note-name fundamental-freq)})
 
 (defn detect-pitch []
   (let [audio-context (current-audio-context)
