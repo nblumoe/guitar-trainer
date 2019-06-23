@@ -21,6 +21,7 @@
                            :current-input nil
                            :audio-context nil
                            :analyser nil
+                           :pitches []
                            :current-pitch "--"}))
 
 (defn set-current-input [device-id]
@@ -30,8 +31,15 @@
   (swap! !app-state assoc :input-devices input-devices))
 
 (defn set-current-pitch [note frequency]
-  (swap! !app-state assoc :current-pitch {:note note
-                                          :frequency frequency}))
+  (swap! !app-state
+         (fn [{:keys [pitches] :as old-state}]
+           (let [num-pitches 20
+                 new-pitches (conj pitches frequency)]
+             (merge old-state {:current-pitch {:note note
+                                               :frequency frequency}
+                               :pitches (if (> (count new-pitches) num-pitches)
+                                          (vec (rest new-pitches))
+                                          new-pitches)})))))
 
 (defn set-analyser [analyser]
   (swap! !app-state assoc :analyser analyser))
@@ -167,7 +175,7 @@
 (defn detect-pitch []
   (let [audio-context (current-audio-context)
         analyser (current-analyser)
-        buffer (js/Uint8Array. (.-fftSize analyser))
+        buffer (js/Uint8Array. (.-frequencyBinCount analyser))
         _ (.getByteTimeDomainData analyser buffer)
         fundamental-freq (find-fundamental-freq-from-bytes buffer (.-sampleRate audio-context))
         ;buffer (js/Float32Array. (.-fftSize analyser))
@@ -212,13 +220,59 @@
      [:h2 "Current note: " (or note default-message)]
      [:h2 "Current frequency: " (or frequency default-message)]]))
 
+(defn draw-pitches [canvas]
+  (let [pitches (:pitches @!app-state)
+        pitches-count (count pitches)
+        ctx (.getContext canvas "2d")
+        w (.-clientWidth canvas)
+        h (.-clientHeight canvas)
+        max-pitch 1500
+        min-pitch 50]
+    (.clearRect ctx 0 0 w h)
+    (.beginPath ctx)
+    (.moveTo ctx 0 h)
+    (doseq [[pitch i] (map #(vector %1 %2)
+                           pitches (range pitches-count))]
+      (when pitch
+        (.lineTo ctx
+                 (* w (/ i (dec pitches-count)))
+                 (- h (* h (/ (- pitch min-pitch) max-pitch))))))
+    (.stroke ctx)))
+
+(defn pitches-ui []
+  (let [dom-node (atom nil)]
+    (reagent/create-class
+     {:component-did-update
+      (fn [this]
+        (draw-pitches (.-firstChild @dom-node)))
+
+      :component-did-mount
+      (fn [this]
+        (reset! dom-node (reagent/dom-node this)))
+
+      :reagent-render
+      (fn []
+        [:div
+         [:canvas (if-let [node @dom-node]
+                    {:width "300px"
+                     :height "150px"})]])})))
+
+(defn pitch-ui [pitches]
+  [:div
+   [pitches-ui pitches]
+   [:ul
+    (for [pitch pitches]
+      ^{:key (random-uuid)}
+      [:li pitch])]])
+
 (defn main-ui []
-  (let [{:keys [current-pitch] :as app-state} @!app-state]
+  (let [{:keys [current-pitch pitches] :as app-state} @!app-state]
     [:div
      [:h1 "Guitar Trainer"]
      [input-selector-ui app-state]
      [start-ui]
      [note-ui current-pitch]
+     [pitch-ui pitches]
      #_[:p (str app-state)]]))
 
 (defn mount [el]
