@@ -83,42 +83,48 @@
      [:option {:value device-id} label])])
 
 (defn find-fundamental-freq [buffer sample-rate]
-  (let [n 1024                                        ;; buffer size / 2
-        best-r (atom 0)
+  (let [best-r (atom 0)
         best-k (atom -1)
         k-start 8                                     ;; frame start distance
         k-end 1000
-        r-threshold 0.9                               ;; threshold for early exit
+        r-threshold 0.9                              ;; threshold for early exit
         r-success 0.0025                              ;; threshold for success case
         normalise #(/ (- % 128) 128)
         continue (atom true)
-        buffer (js->clj (js/Array.from buffer))]
-    (doseq [k (range k-start (inc k-end))
-            :while @continue]
-      (let [first-frame (take n buffer)
-            second-frame (drop k buffer)
-            frame-pairs (map (fn [b1 b2] [b1 b2])
-                             first-frame
-                             second-frame)
-            sum (reduce (fn [sum [b1 b2]]
-                          (+ sum
-                             (* (normalise b1)
-                                (normalise b2))))
-                        0
-                        frame-pairs)
-            r (/ sum (+ n k))]
-        #_(println ">>> r: " r
-                   "... " sum
-                   ">>> frames "
-                   (first first-frame)
-                   (first second-frame))
-        (when (> r @best-r)
-          (reset! best-r r)
-          (reset! best-k k))
-        (when (> r r-threshold)
-          (println ">>> found above threshold")
-          (reset! continue false))))
-    (println ">>> best-r" @best-r)
+        buffer (js->clj (js/Array.from buffer))
+        n (/ (count buffer) 2)                          ;; buffer size / 2
+        first-frame (take n buffer)
+        rms (js/Math.sqrt (/ (reduce (fn [rms x]
+                                       (+ rms
+                                          (* x x)))
+                                     0
+                                     buffer)
+                             (count buffer)))]
+    (when (> rms 0.01)
+      (doseq [k (range (inc k-end) k-start -1)
+              :while @continue]
+        (let [second-frame (drop k buffer)
+              frame-pairs (map (fn [b1 b2] [b1 b2])
+                               first-frame
+                               second-frame)
+              sum (reduce (fn [sum [b1 b2]]
+                            (+ sum
+                               (js/Math.abs
+                                (- b1
+                                   b2))))
+                          0
+                          frame-pairs)
+              r (- 1 (/ sum n))]
+          (when (> r @best-r)
+            (reset! best-r r)
+            (reset! best-k k))
+          #_(when (> r r-threshold)
+            (println ">>> found above threshold" r r-threshold)
+            (reset! continue false))))
+      (println "max/min " (apply max first-frame)
+               (apply min first-frame)
+               " , freq: "
+               (/ sample-rate @best-k)))
     (when (> @best-r r-success)
       (/ sample-rate @best-k))))
 
@@ -128,8 +134,10 @@
 (defn detect-pitch []
   (let [audio-context (current-audio-context)
         analyser (current-analyser)
-        buffer (js/Uint8Array. (.-fftSize analyser))
-        _ (.getByteTimeDomainData analyser buffer)
+        ; buffer (js/Uint8Array. (.-fftSize analyser))
+        ; _ (.getByteTimeDomainData analyser buffer)
+        buffer (js/Float32Array. (.-fftSize analyser))
+        _ (.getFloatTimeDomainData analyser buffer)
         fundamental-freq (find-fundamental-freq buffer (.-sampleRate audio-context))]
     (if fundamental-freq
       (let [{:keys [note frequency]} (find-closest-note fundamental-freq)
@@ -144,25 +152,19 @@
 
 (defn reset-audio-processing!
   [_]
+  (println ">>> resetting audio processing")
   ;; TODO close exisiting resources
   (when-not (current-audio-context)
     (get-audio-context))
-  (println ">>> resetting audio processing")
   (-> (get-audio-input+ (current-input))
       (.then (fn [stream]
-               (println ">>> creating processing pipeline")
                (let [context (current-audio-context)
                      source (.createMediaStreamSource context stream)
-                     analyser (.createAnalyser context)
-                     ;processor (.createScriptProcessor context 4096 1 1)
-                     ]
+                     analyser (.createAnalyser context)]
                  (set-analyser analyser)
-                 (println ">>> setting audio node properties")
                  (set! (.-fftSize analyser) 2048)
-                 ;(set! (.-onaudioprocess processor) process-audio)
-                 (println ">>> connecting audio nodes")
                  (.connect source analyser)
-                 ;(.connect analyser (.-destination context))
+                 (.connect analyser (.-destination context))
                  (detect-pitch))))))
 
 (defn start-ui []
