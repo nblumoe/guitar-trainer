@@ -72,21 +72,6 @@
 (defn get-audio-input+ [device-id]
   (-> (js/navigator.mediaDevices.getUserMedia (clj->js {:audio {"deviceId" device-id}}))))
 
-(defn process-audio
-  [audio-processing-event]
-  (println ">>> processing audio event")
-  (let [input-buffer (aget audio-processing-event "inputBuffer")
-        output-buffer (aget audio-processing-event "outputBuffer")
-        ;; FIXME converting the TypedArray like this might be too expensive
-        input-data (js->clj (js/Array.from (.getChannelData input-buffer 0)))
-        output-data (.getChannelData output-buffer 0)]
-    (println "> num of chans " (.-numberOfChannels input-buffer)
-             ">  input data first " (first input-data))
-    (swap! !app-state assoc :input-avg
-           (/ (apply + input-data)
-              (count input-data))
-           :timestamp (.getTime (js/Date.)))))
-
 (defn input-selector-ui
   [{:keys [current-input input-devices]}]
   [:select {:value current-input
@@ -102,7 +87,6 @@
         k-end 1000
         r-threshold 0.9                               ;; threshold for early exit
         r-success 0.0025                              ;; threshold for success case
-        normalise #(/ (- % 128) 128)
         continue (atom true)
         buffer (js->clj (js/Array.from buffer))
         n (/ (count buffer) 2)                        ;; buffer size / 2
@@ -215,7 +199,7 @@
                  (set-analyser analyser)
                  (set! (.-fftSize analyser) 2048)
                  (.connect source analyser)
-                 (.connect analyser (.-destination context))
+                 (.connect source (.-destination context))
                  (detect-pitch))))))
 
 (defn start-ui []
@@ -223,7 +207,7 @@
    "Start"])
 
 (defn note-ui [{:keys [note frequency]}]
-  (let [default-message "not detected"]
+  (let [default-message "--"]
     [:div
      [:h2 "Current note: " (or note default-message)]
      [:h2 "Current frequency: " (or frequency default-message)]]))
@@ -235,7 +219,7 @@
      [input-selector-ui app-state]
      [start-ui]
      [note-ui current-pitch]
-     [:p (str app-state)]]))
+     #_[:p (str app-state)]]))
 
 (defn mount [el]
   (reagent/render-component [main-ui] el))
