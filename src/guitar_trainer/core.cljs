@@ -4,28 +4,45 @@
    [reagent.core :as reagent :refer [atom]]))
 
 ;; define your app data so that it doesn't get over-written on reload
-(defonce !app-state (atom {}))
+(defonce !app-state (atom {:input-devices '()
+                           :current-input nil
+                           :audio-context nil}))
+
+(defn set-current-input [device-id]
+  (swap! !app-state assoc :current-input device-id))
+
+(defn current-input []
+  (:current-input @!app-state))
+
+(defn set-input-devices [input-devices]
+  (swap! !app-state assoc :input-devices input-devices))
 
 (defn create-audio-context []
   (let [constructor (or js/window.AudioContext
                         js/window.webkitAudioContext)]
     (constructor.)))
 
-(defn get-audio-context! [app-state]
-  (swap! app-state assoc :audio-context (create-audio-context)))
+(defn current-audio-context []
+  (:audio-context @!app-state))
 
-(defn enumerate-inputs+ []
+(defn get-audio-context []
+  (swap! !app-state assoc :audio-context (create-audio-context)))
+
+(defn enumerate-devices+ []
   (-> (js/navigator.mediaDevices.enumerateDevices)
       (.then (fn [devices]
                (->> (js->clj devices {:keywordize-keys true})
                     (map (fn [device]
                            {:label (.-label device)
-                            :device-id (aget device "deviceId")})))))))
+                            :device-id (aget device "deviceId")
+                            :kind (.-kind device)})))))))
 
-(defn get-inputs! [app-state]
-  (-> (enumerate-inputs+)
-      (.then #(swap! app-state assoc :input-devices %))))
-
+(defn get-input-devices+ []
+  (-> (enumerate-devices+)
+      (.then (fn [devices]
+               (let [input-devices (filter #(= "audioinput" (:kind %)) devices)]
+                 (set-input-devices input-devices)
+                 input-devices)))))
 
 (defn get-audio-input+ [device-id]
   (-> (js/navigator.mediaDevices.getUserMedia (clj->js {:audio {"deviceId" device-id}
@@ -40,40 +57,59 @@
         output-data (.getChannelData output-buffer 0)]
     (println "> num of chans " (.-numberOfChannels input-buffer)
              ">  input data first " (first input-data))
-
     (swap! !app-state assoc :input-avg
            (/ (apply + input-data)
               (count input-data))
-           :timestampe (.getTime (js/Date.)))))
+           :timestamp (.getTime (js/Date.)))))
 
-(defn init! [app-state]
-  (get-audio-context! app-state)
-  (get-inputs! app-state)
-  (-> (get-audio-input+ "default")
+(defn init! []
+  (get-audio-context)
+  (-> (get-input-devices+)
+      (.then #(set-current-input (first %)))))
+
+(defn get-app-element []
+  (gdom/getElement "app"))
+
+(defn input-selector-ui
+  [{:keys [current-input input-devices]}]
+  [:select {:value current-input
+            :on-change #(set-current-input (.. % -target -value))}
+   (for [{:keys [label device-id]} input-devices]
+     ^{:key device-id}
+     [:option {:value device-id} label])])
+
+(defn reset-audio-processing!
+  [_]
+  ;; TODO close exisiting resources
+  (-> (get-audio-input+ (current-input))
       (.then (fn [stream]
-               (let [context (get @app-state :audio-context)
+               (let [context (current-audio-context)
                      source (.createMediaStreamSource context stream)
                      processor (.createScriptProcessor context 4096 1 1)]
                  (.connect source processor)
                  (.connect processor (.-destination context))
                  (set! (.-onaudioprocess processor)
-                       process-audio))))))
+                       process-audio)))))
+  )
 
-(init! !app-state)
+(defn start-ui []
+  [:button {:on-click reset-audio-processing!}
+   "Start"])
 
-(defn get-app-element []
-  (gdom/getElement "app"))
-
-(defn main-ui [app-state]
-  [:div
-   [:h1 "Guitar Trainer"]
-   [:p (str @app-state)]])
+(defn main-ui []
+  (let [{:keys [] :as app-state} @!app-state]
+    [:div
+     [:h1 "Guitar Trainer"]
+     [input-selector-ui app-state]
+     [start-ui]
+     [:p (str app-state)]]))
 
 (defn mount [el]
-  (reagent/render-component [main-ui !app-state] el))
+  (reagent/render-component [main-ui] el))
 
 (defn mount-app-element []
   (when-let [el (get-app-element)]
+    (init!)
     (mount el)))
 
 ;; conditionally start your application based on the presence of an "app" element
