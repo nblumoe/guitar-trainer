@@ -82,7 +82,7 @@
      ^{:key device-id}
      [:option {:value device-id} label])])
 
-(defn find-fundamental-freq [buffer sample-rate]
+(defn find-fundamental-freq-from-floats [buffer sample-rate]
   (let [best-r (atom 0)
         best-k (atom -1)
         k-start 8                                     ;; frame start distance
@@ -119,12 +119,48 @@
             (reset! best-r r)
             (reset! best-k k))
           #_(when (> r r-threshold)
-            (println ">>> found above threshold" r r-threshold)
-            (reset! continue false))))
+              (println ">>> found above threshold" r r-threshold)
+              (reset! continue false))))
       (println "max/min " (apply max first-frame)
                (apply min first-frame)
                " , freq: "
                (/ sample-rate @best-k)))
+    (when (> @best-r r-success)
+      (/ sample-rate @best-k))))
+
+(defn find-fundamental-freq-from-bytes [buffer sample-rate]
+  (let [best-r (atom 0)
+        best-k (atom -1)
+        k-start 8                                     ;; frame start distance
+        k-end 1000
+        r-threshold 0.9                              ;; threshold for early exit
+        r-success 0.001                              ;; threshold for success case
+        normalise #(/ (- % 128) 128)
+        continue (atom true)
+        buffer (map normalise (js->clj (js/Array.from buffer)))
+        n (/ (count buffer) 2)                          ;; buffer size / 2
+        first-frame (take n buffer)]
+    (doseq [k (range (inc k-end) k-start -1)
+            :while @continue]
+      (let [second-frame (drop k buffer)
+            frame-pairs (map (fn [b1 b2] [b1 b2])
+                             first-frame
+                             second-frame)
+            sum (reduce (fn [sum [b1 b2]]
+                          (+ sum
+                             (* b1
+                                b2)))
+                        0
+                        frame-pairs)
+            r (/ sum n)]
+        (when (> r @best-r)
+          (reset! best-r r)
+          (reset! best-k k))
+        (when (> r r-threshold)
+            (println ">>> found above threshold" r r-threshold)
+            (reset! continue false))))
+    (println "best correlation: " @best-r
+             " , freq: " (/ sample-rate @best-k))
     (when (> @best-r r-success)
       (/ sample-rate @best-k))))
 
@@ -134,11 +170,13 @@
 (defn detect-pitch []
   (let [audio-context (current-audio-context)
         analyser (current-analyser)
-        ; buffer (js/Uint8Array. (.-fftSize analyser))
-        ; _ (.getByteTimeDomainData analyser buffer)
-        buffer (js/Float32Array. (.-fftSize analyser))
-        _ (.getFloatTimeDomainData analyser buffer)
-        fundamental-freq (find-fundamental-freq buffer (.-sampleRate audio-context))]
+         buffer (js/Uint8Array. (.-fftSize analyser))
+         _ (.getByteTimeDomainData analyser buffer)
+        fundamental-freq (find-fundamental-freq-from-bytes buffer (.-sampleRate audio-context))
+        ;buffer (js/Float32Array. (.-fftSize analyser))
+        ;_ (.getFloatTimeDomainData analyser buffer)
+        ;fundamental-freq (find-fundamental-freq-from-floats buffer (.-sampleRate audio-context))
+        ]
     (if fundamental-freq
       (let [{:keys [note frequency]} (find-closest-note fundamental-freq)
             ;; TODO add distance from target here
