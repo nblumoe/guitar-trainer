@@ -142,34 +142,40 @@
       (/ sample-rate @best-k))))
 
 (defn find-fundamental-freq-from-bytes [buffer sample-rate]
-  (let [!state (atom {:best-r 0 :best-k -1 :continue? true})
-        k-start 20                                    ;; frame start distance
+  (let [k-start 20                                    ;; frame start distance
         k-end 1000
         r-threshold 0.02                              ;; threshold for early exit
         r-success 0.001                               ;; threshold for success case
         normalise #(/ (- % 128) 128)
-        buffer (js/Array.from buffer)
+        buffer (map normalise (js/Array.from buffer))
         n (/ (count buffer) 2)                        ;; buffer size / 2
-        first-frame (take n buffer)]
-    (doseq [k (range k-start (inc k-end))
-            :while (:continue? @!state)]
-      (let [second-frame (drop k buffer)
-            frame-pairs (map (fn [x y]
-                               (* (normalise x)
-                                  (normalise y)))
-                             first-frame
-                             second-frame)
-            sum (apply + frame-pairs)
-            r (/ sum n)]
-        (when (> r (:best-r @!state))
-          (swap! !state assoc :best-r r :best-k k))
-        (when (> r r-threshold)
-          (println ">>> found above threshold" r r-threshold)
-          (swap! !state assoc :continue? false))))
-    #_(println "best correlation: " @best-r
-               " , freq: " (/ sample-rate @best-k))
-    (when (> (:best-r @!state) r-success)
-      (/ sample-rate (:best-k @!state)))))
+        first-frame (take n buffer)
+        [best-r best-k] (loop [k k-start
+                               best-r 0
+                               best-k -1
+                               second-frame (drop k buffer)]
+                          (let [frame-pairs (map *
+                                                 first-frame
+                                                 second-frame)
+                                sum (apply + frame-pairs)
+                                r (/ sum n)]
+                            (cond
+                              (> k k-end)
+                              [best-r best-k]
+
+                              (> r r-threshold)
+                              (do
+                                (println ">>> found above threshold" r r-threshold)
+                                [r k])
+
+                              (> r best-r)
+                              (recur (inc k) r k (rest second-frame))
+
+                              :else
+                              (recur (inc k) best-r best-k (rest second-frame)))))]
+
+    (when (> best-r r-success)
+      (/ sample-rate best-k))))
 
 (defn find-closest-note [fundamental-freq]
   {:note (frequency->note-name fundamental-freq)})
